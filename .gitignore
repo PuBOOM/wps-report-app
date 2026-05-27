@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+debug_*.py
+test_*.py
+test_*.txt
+*.csv
+*.xlsx
+.env
