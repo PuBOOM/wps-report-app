@@ -35,10 +35,21 @@ def load_csv(file) -> pd.DataFrame:
     return pd.read_csv(buf, encoding="utf-8", encoding_errors="replace")
 
 
+def _safe_float(val) -> float:
+    """安全转float，NaN/空值/非数字 → 0"""
+    if val is None:
+        return 0.0
+    try:
+        f = float(val)
+        if pd.isna(f):
+            return 0.0
+        return f
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def parse_cascade(value: str) -> dict:
-    """
-    解析3级级联: "公司（板块）-项目-子项目"
-    """
+    """解析3级级联: "公司（板块）-项目-子项目" """
     if pd.isna(value) or not value or str(value).strip() == "":
         return {"plate": None, "project": None, "sub_project": None}
 
@@ -52,10 +63,8 @@ def parse_cascade(value: str) -> dict:
     if len(parts) >= 1:
         m = re.search(r"[（(](.*?)[）)]", parts[0])
         plate = m.group(1) if m else parts[0]
-
     if len(parts) >= 2:
         project = parts[1]
-
     if len(parts) >= 3:
         sub_project = parts[2]
 
@@ -63,19 +72,15 @@ def parse_cascade(value: str) -> dict:
 
 
 def reshape_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    宽表 → 长表，同时做项目合并和名称映射
-    """
+    """宽表 → 长表，同时做项目合并和名称映射"""
     rows = []
 
-    # 找日期列
     date_col = None
     for col in df.columns:
         s = str(col)
-        if '\u65e5\u671f' in s or '\u9879\u76ee' in s:
-            if '\u65e5\u671f' in s:
-                date_col = col
-                break
+        if '\u65e5\u671f' in s:
+            date_col = col
+            break
     if date_col is None:
         raise ValueError(f"Date column not found. Columns: {list(df.columns[:5])}")
 
@@ -109,10 +114,8 @@ def reshape_data(df: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             # ---- 合并规则 ----
-            # Level2 合并（大东九龙冰场→北山公园）
             project_merged = PROJECT_MERGE_MAP.get(project_raw, project_raw)
 
-            # Level3 合并（东湖码头相关的合并）
             if sub_raw:
                 sub_merged = SUB_MERGE_MAP.get(sub_raw, sub_raw)
             else:
@@ -133,15 +136,15 @@ def reshape_data(df: pd.DataFrame) -> pd.DataFrame:
             )
             is_century_boat = (project_merged == "世纪之舟")
 
-            # 数值
-            try:
-                visitor = float(row.get(visitor_col, 0) or 0)
-            except (ValueError, TypeError):
-                visitor = 0
-            try:
-                revenue = float(row.get(revenue_col, 0) or 0)
-            except (ValueError, TypeError):
-                revenue = 0
+            # 数值（修复NaN问题）
+            visitor = _safe_float(row.get(visitor_col))
+            revenue = _safe_float(row.get(revenue_col))
+
+            # 世纪之舟特殊子项：分配独立sub_project值，避免重复检测误报
+            if is_century_guest:
+                sub_display = "__century_guest__"
+            elif is_century_dine:
+                sub_display = "__century_dine__"
 
             rows.append({
                 "date": d,
@@ -162,8 +165,27 @@ def reshape_data(df: pd.DataFrame) -> pd.DataFrame:
             "sub_project", "is_century_guest", "is_century_dine",
             "is_century_boat", "visitors", "revenue"
         ])
-
     return pd.DataFrame(rows)
+
+
+def find_duplicates(df: pd.DataFrame) -> list:
+    """
+    检测同一日期、同一项目+子项目是否有重复数据
+    返回重复信息列表: [(date, project, sub_project, count), ...]
+    """
+    dup_info = []
+
+    grouped = df.groupby(["date", "project", "sub_project"], dropna=False)
+    for (d, proj, sub), group in grouped:
+        cnt = len(group)
+        if cnt > 1:
+            # 排除世纪之舟内部标记
+            sub_str = str(sub) if sub else "(无子项目)"
+            if sub_str.startswith("__century"):
+                sub_str = "顶层餐厅特殊数据"
+            dup_info.append((d, proj, sub_str, cnt))
+
+    return dup_info
 
 
 def filter_by_date(df: pd.DataFrame, start_date, end_date) -> pd.DataFrame:

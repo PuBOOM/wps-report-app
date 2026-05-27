@@ -8,7 +8,7 @@ from datetime import date, timedelta
 import html
 
 from config import HIERARCHY
-from data_loader import load_csv, reshape_data, filter_by_date, filter_by_plates, filter_by_projects
+from data_loader import load_csv, reshape_data, filter_by_date, filter_by_plates, filter_by_projects, find_duplicates
 from report_generator import generate_report
 
 
@@ -214,6 +214,16 @@ if generate_btn and st.session_state.data is not None:
         prev_df = filter_by_plates(prev_df, selected_plates)
         prev_df = filter_by_projects(prev_df, selected_projects)
 
+    # 数据重复检测
+    duplicates = find_duplicates(current_df)
+    dup_warning = ""
+    if duplicates:
+        dup_warning = "\n\n⚠️ ⚠️ ⚠️ 数据重复警告 ⚠️ ⚠️ ⚠️\n"
+        dup_warning += "以下项目在同一天存在多条数据，请检查后台：\n"
+        for d, proj, sub, cnt in duplicates:
+            dup_warning += f"  · {d} 【{proj}】{sub}：{cnt}条重复\n"
+        dup_warning += "请修正后重新上传！"
+
     # 生成报告
     type_map = {"日报": "daily", "周报": "weekly", "月报": "monthly", "年报": "yearly"}
     report_text = generate_report(
@@ -221,7 +231,12 @@ if generate_btn and st.session_state.data is not None:
         type_map[report_type],
         target_date,
         prev_df if (prev_df is not None and len(prev_df) > 0) else None,
+        selected_projects=set(selected_projects) if selected_projects else None,
     )
+
+    # 拼接重复警告
+    if dup_warning:
+        report_text = dup_warning + "\n\n" + report_text
 
     st.session_state.report = report_text
     st.session_state.current_df = current_df
